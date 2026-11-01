@@ -112,6 +112,12 @@ export async function login(req , resp){
     }
 )
 const refreshTokenHash = crypto.createHash("sha256").update(refreshtoken).digest("hex");
+
+await sessionmodel.deleteMany({
+    user: user._id,
+    revoked: false
+})
+
 const session  = await sessionmodel.create({
     user:user._id,
     refreshToken: refreshTokenHash,
@@ -128,16 +134,17 @@ const accessToken = jwt.sign({
 
 )
 resp.cookie("refreshtoken", refreshtoken, {
-    httpOnly:true,
-    secure:true,
-    sameSite:"strict",
+    httpOnly: true,
+    secure: true,
+    sameSite: "none",
     maxAge: 7 * 24 * 60 * 60 * 1000
 })
 resp.status(200).json({
     message:"User Logged in ",
     user:{
         username:user.username,
-        useremail: user.email
+        email: user.email,
+        verified: user.verified
     },
     accessToken,
 })
@@ -161,7 +168,8 @@ export async function getMe(req, resp) {
         message: "user fetched",
         user: {
             username: user.username,
-            email: user.email
+            email: user.email,
+            verified: user.verified
         }
     })
 }
@@ -226,7 +234,7 @@ export async function refreshToken(req, resp) {
     resp.cookie('refreshtoken', newRefreshToken, {
         httpOnly: true,
         secure: true,
-        sameSite: "Strict",
+        sameSite: "none",
         maxAge: 7 * 24 * 60 * 60 * 1000
     })
 
@@ -256,10 +264,14 @@ export async function logout(req, resp) {
             message: "invalid refresh token"
         })
     }
-    session.revoked = true
-    await session.save()
 
-    resp.clearCookie('refreshtoken')
+    await sessionmodel.deleteOne({ _id: session._id })
+
+    resp.clearCookie('refreshtoken', {
+        httpOnly: true,
+        secure: true,
+        sameSite: "none"
+    })
     resp.status(200).json({
         message: "user logged out successfully"
     })
@@ -274,14 +286,15 @@ export async function logoutAll(req, resp) {
     }
     const decoded = jwt.verify(refreshToken, config.JWT_SECRET)
 
-    await sessionmodel.updateMany({
+    await sessionmodel.deleteMany({
         user: decoded.id,
         revoked: false
-    }, {
-
-        revoked: true
     })
-    resp.clearCookie('refreshtoken')
+    resp.clearCookie('refreshtoken', {
+        httpOnly: true,
+        secure: true,
+        sameSite: "none"
+    })
     resp.status(200).json({
         message: "user logged out from all devices"
     })
