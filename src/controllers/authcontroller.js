@@ -16,7 +16,7 @@ export async function register(req, resp) {
     })
     if (isAlreadyRegistered) {
         return resp.status(400).json({
-            message: "User already registered"
+            message: "User already registered Check Your email for verification code"
         })
     }
 
@@ -60,15 +60,25 @@ export async function register(req, resp) {
 
     const otp = generateOTP()
     const html = getOtpHtml(otp)
+    const otphash = crypto.createHash("sha256").update(String(otp)).digest("hex");
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
-    const otphash = crypto.createHash("sha256").update(otp).digest("hex");
-    await otpmodel.create({
-        email,
-        user: user._id,
-        otpHash: otphash
-    })
+    try {
+        await otpmodel.create({
+            user: user._id,
+            username: user.username,
+            email,
+            otpHash: otphash,
+            expiresAt
+        })
+    } catch (error) {
+        console.error("OTP save failed:", error);
+        return resp.status(500).json({
+            message: "Failed to save OTP"
+        });
+    }
 
-    await sendEmail(email ,  "OTP Verifiaction" , `Your Otp code is${otp}` , html )
+    await sendEmail(email, "OTP Verification", `Your Otp code is ${otp}`, html)
 
     resp.status(201).json({
         message: "User registered successfully",
@@ -110,29 +120,41 @@ export async function login(req , resp){
     }, config.JWT_SECRET, {
         expiresIn: '7d'
     }
-)
-const refreshTokenHash = crypto.createHash("sha256").update(refreshtoken).digest("hex");
+    )
 
-await sessionmodel.deleteMany({
-    user: user._id,
-    revoked: false
-})
+    const refreshTokenHash = crypto.createHash("sha256").update(refreshtoken).digest("hex");
+    const clientIp = req.ip || req.socket?.remoteAddress || 'unknown';
+    const userAgent = req.get('user-agent') || 'unknown';
 
-const session  = await sessionmodel.create({
-    user:user._id,
-    refreshToken: refreshTokenHash,
-    ip:req.ip,
-    userAgent:req.get('user-agent')
-})
-const accessToken = jwt.sign({
-    id:user._id,
-    sessionId:session._id
-},config.JWT_SECRET,
-{
-    expiresIn:"15m"
-}
+    await sessionmodel.deleteMany({
+        user: user._id,
+        revoked: false
+    })
 
-)
+    let session;
+    try {
+        session = await sessionmodel.create({
+            user: user._id,
+            refreshToken: refreshTokenHash,
+            ip: clientIp,
+            userAgent
+        })
+    } catch (error) {
+        console.error("Session save failed:", error);
+        return resp.status(500).json({
+            message: "Failed to create session"
+        });
+    }
+
+    const accessToken = jwt.sign({
+        id:user._id,
+        sessionId:session._id
+    },config.JWT_SECRET,
+    {
+        expiresIn:"15m"
+    }
+
+    )
 resp.cookie("refreshtoken", refreshtoken, {
     httpOnly: true,
     secure: true,
@@ -313,6 +335,13 @@ export async function verifyemail(req , resp){
         })
     }
 
+    if (otpdoc.expiresAt && new Date(otpdoc.expiresAt).getTime() < Date.now()) {
+        await otpmodel.deleteMany({ user: otpdoc.user })
+        return resp.status(400).json({
+            message: "OTP expired"
+        })
+    }
+
     const user = await usermodel.findByIdAndUpdate(otpdoc.user , {
         verified:true
     }, {
@@ -323,10 +352,6 @@ export async function verifyemail(req , resp){
             message: "User not found"
         })
     }
-
-    await otpmodel.deleteMany({
-        user:otpdoc.user
-    })
 
     return resp.status(200).json({
         message: "Email verified successfully",

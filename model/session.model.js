@@ -12,11 +12,11 @@ const sessionSchema = new mongoose.Schema({
     },
     ip: {
         type: String,
-        required: [true, 'ip is required']
+        default: 'unknown'
     },
     userAgent: {
         type: String,
-        required: [true, 'user agent is required']
+        default: 'unknown'
     },
     revoked: {
         type: Boolean,
